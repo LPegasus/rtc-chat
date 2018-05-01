@@ -82,6 +82,7 @@ const createAgent = (index: number) => {
       case 'need-new-one': {
         wk.disconnect();
         wk.removeAllListeners();
+        log(msg);
         wkList[+msg.index] = createAgent(+msg.index);
         log(chalk.default.redBright(`worker[${msg.index}] will restart.`));
         break;
@@ -159,7 +160,7 @@ process.on('beforeExit', () => {
   while (wkList.length) {
     const wk = wkList.shift();
     if (wk && !wk.isDead) {
-      wk.kill('SIGKILL');
+      wk.kill('SIGTERM');
     }
   }
 });

@@ -18,14 +18,15 @@ process.on('uncaughtException', (e: Error) => {
   process.exit(os.constants.signals.SIGILL);
 });
 
-process.on('SIGKILL', () => {
-  console.log(chalk.default.cyan(`worker[${process.env.index}] will be killed.`));
-  process.exit(os.constants.signals.SIGKILL);
-});
+// process.on('SIGKILL', () => {
+//   console.log(chalk.default.cyan(`worker[${process.env.index}] will be killed.`));
+//   process.exit(os.constants.signals.SIGKILL);
+// });
 
 const app = express();
 const server = http.createServer(app);
 server.listen(process.env.port);
+console.log(`server ${process.env.index} listen on port: ${process.env.port}`);
 
 const wsServer = new WebsocketServer({
   httpServer: server,
