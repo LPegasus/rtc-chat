@@ -1,15 +1,15 @@
 declare interface IRoom {
   id: string;
   offer?: {
-    connectionUUID?: string;
-    connectionPid?: string;
-    dsp?: RTCSessionDescription;
+    connectionUUID: string;
+    connectionPid: string;
+    sdp?: RTCSessionDescription;
     // candidate?: RTCIceCandidate;
   };
   answer?: {
-    connectionUUID?: string;
-    connectionPid?: string;
-    dsp?: RTCSessionDescription;
+    connectionUUID: string;
+    connectionPid: string;
+    sdp?: RTCSessionDescription;
     // candidate?: RTCIceCandidate;
   };
 }
@@ -17,4 +17,6 @@ declare interface IRoom {
 declare type WSConnectionDSP = {
   id: string;
   wkId: number;
+  candidate?: RTCIceCandidate;
+  sdp?: RTCSessionDescription;
 };

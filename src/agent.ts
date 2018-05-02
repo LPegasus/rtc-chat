@@ -1,9 +1,12 @@
 import * as express from 'express';
-import * as http from 'http';
+import * as https from 'https';
 import * as os from 'os';
 import * as chalk from 'chalk';
+import { readFileSync } from 'fs';
+import * as path from 'path';
 import { server as WebsocketServer, connection as WSConnection, request as WSRequest, IMessage } from 'websocket';
-import { shouldAcceptWS } from './config';
+import { shouldAcceptWS, SSL } from './config';
+import { asyncTimout, Defer } from './utils';
 
 type WSConnectionEX = WSConnection & { _pid: string; _uuid: string; };
 
@@ -13,6 +16,9 @@ let connectUUID = 0;
 
 process.on('uncaughtException', (e: Error) => {
   if (process.send) {
+    console.log('------------i\'m going to die-------------');
+    console.log(e);
+    console.log('-----------------  dead  -----------------');
     process.send({ type: 'need-new-one', error: e, index: process.env.index });
   }
   process.exit(os.constants.signals.SIGILL);
@@ -24,7 +30,10 @@ process.on('uncaughtException', (e: Error) => {
 // });
 
 const app = express();
-const server = http.createServer(app);
+const server = https.createServer({
+  key: readFileSync(path.resolve(SSL.key)),
+  cert: readFileSync(path.resolve(SSL.cert)),
+}, app);
 server.listen(process.env.port);
 console.log(`server ${process.env.index} listen on port: ${process.env.port}`);
 
@@ -42,30 +51,21 @@ process.on('message', (msg) => {
     connection._pid = msg.id;
 
     connection.sendUTF(JSON.stringify({
-      ok: true,
+      type: 'connect-success',
       id: connection._pid,
       wid: connection._uuid,
     }));
 
     wrapConnectionHandle(connection);
-  } else if (msg.type === 'add-connection-fail') {
-    const uuid = msg.mirror;
-    delete connectionMap[uuid];
-  } else if (msg.type === 'join-room-success') {
-    const connection = connectionMap[msg.mirror];
-    connection.sendUTF(JSON.stringify({ ok: true }));
-  } else if (msg.type === 'add-room-success') {
-    const connection = connectionMap[msg.mirror];
-    connection.sendUTF(JSON.stringify({ ok: true }));
   }
 });
 
-async function createRoom(connection: WSConnectionEX, dspFromOffer: RTCSessionDescription) {
+async function createRoom(connection: WSConnectionEX, sdpFromOffer: RTCSessionDescription) {
   const mirror = connection._uuid + Date.now();
   const offer = {
     connectionPid: connection._pid,
     connectionUUID: connection._uuid,
-    dsp: dspFromOffer,
+    sdp: sdpFromOffer,
   };
   return new Promise((resolve, reject) => {
     const timer = setTimeout(() => {
@@ -88,9 +88,10 @@ async function createRoom(connection: WSConnectionEX, dspFromOffer: RTCSessionDe
       if (msg.mirror === mirror) {
         clearTimeout(timer);
         process.removeListener('message', handler);
-        if (msg.action === 'add-room-success') {
+        if (msg.type === 'add-room-success') {
           connection.sendUTF(JSON.stringify({
-            ok: true,
+            type: 'add-room-success',
+            roomId: msg.id,
           }));
         }
       }
@@ -99,12 +100,12 @@ async function createRoom(connection: WSConnectionEX, dspFromOffer: RTCSessionDe
   });
 }
 
-async function joinRoom(connection: WSConnectionEX, dspFromAnswer: RTCSessionDescription, roomId: string) {
+async function joinRoom(connection: WSConnectionEX, sdpFromAnswer: RTCSessionDescription, roomId: string) {
   const mirror = connection._uuid + Date.now();
   const answer = {
     connectionPid: connection._pid,
     connectionUUID: connection._uuid,
-    dsp: dspFromAnswer,
+    sdp: sdpFromAnswer,
   };
 
   return new Promise((resolve, reject) => {
@@ -122,7 +123,7 @@ async function joinRoom(connection: WSConnectionEX, dspFromAnswer: RTCSessionDes
       return;
     }
 
-    // 加入房间。必须传入房间号和 answer 的 dsp 相关信息
+    // 加入房间。必须传入房间号和 answer 的 sdp 相关信息
     process.send({ type: 'join-room', mirror, answer, roomId });
     function handler(msg) {
       if (msg.mirror === mirror) {
@@ -154,6 +155,26 @@ async function leaveRoom(connection: WSConnectionEX) {
   connection.close();
 }
 
+const updateCandidate = asyncTimout(
+  async (connection: WSConnectionEX, candidate: RTCIceCandidate) => {
+    const defer = new Defer();
+    const mirror = connection._uuid + Date.now();
+    process.send && process.send({ mirror, type: 'update-candidate', id: connection._pid, candidate })
+    function handler(msg) {
+      if (msg.type === 'update-candidate-finish') {
+        console.log('update-candidate-finish');
+      }
+      process.removeListener('message', handler);
+      connection.sendUTF(JSON.stringify({
+        type: 'update-candidate-finish',
+      }));
+      defer.resolve({});
+    }
+    process.on('message', handler);
+    return defer.promise;
+  },
+  5000);
+
 const wrapConnectionHandle = (connection: WSConnectionEX) => {
   connection.on('message', async (msg: IMessage) => {
     if (msg.type !== 'utf8' || !msg.utf8Data) {
@@ -163,16 +184,16 @@ const wrapConnectionHandle = (connection: WSConnectionEX) => {
     const action: { [key: string]: any } = JSON.parse(msg.utf8Data);
 
     switch (action.type) {
-      // { dsp }
+      // { sdp }
       case 'create-room': { // 创建房间
-        await createRoom(connection, action.dsp);
+        await createRoom(connection, action.sdp);
         break;
       }
 
-      // { dsp, roomId }
+      // { sdp, roomId }
       case 'join-room': { // 加入房间
         try {
-          await joinRoom(connection, action.dsp, action.roomId);
+          await joinRoom(connection, action.sdp, action.roomId);
         } catch (e) {
           connection.sendUTF(JSON.stringify({
             type: 'alert',
@@ -193,13 +214,19 @@ const wrapConnectionHandle = (connection: WSConnectionEX) => {
         }
         break;
       }
+
+      case 'update-candidate': {
+        const candidate = action.candidate;
+        await updateCandidate(connection, candidate);
+        break;
+      }
     }
   });
 }
 
 wsServer.on('request', (req: WSRequest) => {
   if (shouldAcceptWS(req) === true) {
-    req.accept('http, https', req.origin);
+    req.accept();
   } else {
     req.reject(200, 'not accept');
   }

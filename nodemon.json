@@ -1,0 +1,5 @@
+{
+  "verbose": true,
+  "ignore": ["static/*", "src/*"],
+  "delay": 1000
+}

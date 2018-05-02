@@ -1,5 +1,4 @@
 import * as cluster from 'cluster';
-import * as http from 'http';
 import * as path from 'path';
 import * as os from 'os';
 import { ChildProcess } from 'child_process';
@@ -8,9 +7,8 @@ import { omit } from 'lodash';
 import { createHash } from 'crypto';
 import { maxConnection } from './config';
 
-const hash = createHash('sha256');
-
 function nextHash(seed) {
+  const hash = createHash('sha256');
   return hash.update(`LPegasus${Date.now()}${seed}`).digest('base64').substr(0, 6);
 }
 
@@ -54,11 +52,49 @@ const createAgent = (index: number) => {
     }
   }
 
+  const updateCandidate = (id: string, candidate: RTCIceCandidate, mirror: string) => {
+    const conn = wkLocalVars.connectionList.find(d => d.id === id);
+    if (!conn) {
+      log(chalk.default.bgRed('No connection was found when update candidate.'));
+    } else {
+      conn.candidate = candidate;
+      let notifyId: string | undefined;
+      for (let i = 0; i < wkLocalVars.rooms.length; i++) {
+        const d = wkLocalVars.rooms[i];
+        if (!!d.answer && d.answer.connectionPid === conn.id) {
+          if (d.offer) {
+            notifyId = d.offer.connectionPid;
+          }
+          break;
+        }
+        if (!!d.offer && d.offer.connectionPid === conn.id) {
+          if (d.answer) {
+            notifyId = d.answer.connectionPid;
+          }
+          break;
+        }
+      }
+
+      wk.send({
+        type: 'update-candidate-finish',
+        mirror,
+      });
+
+      if (notifyId) {
+        const target = wkLocalVars.connectionList.filter(d => d.id === notifyId)[0];
+        if (target) {
+          const wkT = wkList.find(d => d.id === target.wkId);
+          if (wkT) {
+            wkT.send({ type: 'notify-candidate-change', mirror, candidate });
+          }
+        }
+      }
+    }
+  }
 
   wk.on('message', (msg: { type: string } & { [key: string]: any }) => {
     const registerConnection = (wkId: number) => {
-      const senderWK = wkList.find(d => d.id === wkId);
-      if (!senderWK || !senderWK.isConnected || senderWK.isDead) {
+      if (!wk || !wk.isConnected() || wk.isDead()) {
         log(chalk.default.red(`Worker[id: ${wkId}] is dead or not exist. So register ws connection failed.`));
         return null;
       }
@@ -101,14 +137,28 @@ const createAgent = (index: number) => {
         break;
       }
       case 'add-room': {
+        const connection = wkLocalVars.rooms.filter(d => !!(d.offer && d.offer.connectionPid === msg.offer.connectionPid))[0];
+        if (connection) {
+          wk.send({
+            type: 'add-room-fail',
+            mirror: msg.mirror,
+          });
+          break;
+        }
         const room: IRoom = {
           offer: msg.offer,
           id: nextHash(`room${wkLocalVars.rooms.length}`),
         };
+
+        const conn = wkLocalVars.connectionList.filter(d => d.id === msg.offer.id)[0];
+        conn.sdp = msg.offer;
+
         wkLocalVars.rooms.push(room);
+        log(chalk.default.whiteBright(`room created [${room.id}]`));
         wk.send({
           type: 'add-room-success',
           mirror: msg.mirror,
+          id: room.id,
         });
         break;
       }
@@ -137,6 +187,10 @@ const createAgent = (index: number) => {
       }
       case 'leave-room': {
         leaveRoom(msg.id);
+        break;
+      }
+      case 'update-candidate': {
+        updateCandidate(msg.id, msg.candidate, msg.mirror);
         break;
       }
     }

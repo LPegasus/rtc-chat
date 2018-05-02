@@ -1,14 +1,25 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta http-equiv="X-UA-Compatible" content="ie=edge">
   <title>Room</title>
 </head>
+
 <body>
-  <video id="video"></video>
-  <video id="video2"></video>
+  <div>
+    <video id="self-video"></video>
+  </div>
+  <div>
+    <video id="other-video"></video>
+  </div>
+  <div>
+    <button id="add-room">创建房间</button>
+    <input placeholder="输入房间号，按回车键加入" id="join-room-input">
+  </div>
   <script src="./index.js"></script>
 </body>
+
 </html>
